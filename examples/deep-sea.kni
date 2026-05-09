@@ -1,0 +1,127 @@
+@config
+  title: "深海遗迹"
+  author: "kNi Demo"
+  version: 1.0
+  start: scene.intro
+  lang: zh
+
+@define
+  char Aria:
+    name: "Aria"
+    portrait: none
+    color: #a3cfff
+    stats:
+      trust: 0
+      alive: true
+
+  char Narrator:
+    name: ""
+    portrait: none
+
+  item keycard:
+    name: "废旧门卡"
+    desc: "门禁系统已经锈蚀，但这张卡或许还能用。"
+    icon: none
+    stackable: false
+    tags: [key, metal]
+
+  var chapter: 1
+  var ending: none
+  var flags: []
+
+@scene intro
+  bg: assets/bg_beach.jpg
+  music: bgm/mysterious.ogg
+  transition: fade 0.8
+
+  :: 海浪拍打着锈迹斑斑的金属舱门。
+
+  Aria :: 这里……就是坐标所指的地方？
+
+  ---
+
+  Aria :: 感觉不对劲。
+  Aria :: (whisper) 有什么东西在里面。
+
+  ---
+
+  ? "你会怎么做？"
+    > "推开舱门"
+      -> scene.enter_hatch
+    > "先环顾四周"
+      -> scene.look_around
+    > "原路返回"
+      [if Aria.stats.trust >= 10]
+      -> scene.retreat
+
+@scene look_around
+  Aria :: 四周散落着一些生锈的零件。
+
+  [add_flag "saw_mural"]
+  [give item.keycard]
+
+  Aria :: 这是什么？一张门卡……
+
+  -> scene.enter_hatch
+
+@scene enter_hatch
+  Aria :: 好吧，进去看看。
+
+  [set Aria.stats.trust += 5]
+
+  :: 舱门缓缓打开，露出一条向下的阶梯。
+
+  [sfx door_open]
+  [shake screen 0.4]
+
+  Aria :: (whisper) 太安静了。
+
+  -> scene.underground
+
+@scene underground
+  bg: assets/bg_underground.jpg
+  music: bgm/tense.ogg
+
+  :: 阶梯尽头是一个巨大的地下空间。
+
+  Aria :: 这……这是什么？
+
+  ? "你发现了什么？"
+    > "调查墙壁上的壁画"
+      [add_flag "saw_mural"]
+      :: 壁画描绘了一座沉入海底的城市。
+      -> scene.check_end
+    > "检查中央的控制台"
+      :: 控制台上闪烁着微弱的灯光。
+      -> scene.check_end
+
+@scene check_end
+  [call logic.check_endings]
+
+@scene retreat
+  Aria :: 不行，我还不够信任这里。
+  [set Aria.stats.trust -= 3]
+  -> scene.intro
+
+@scene ending_A
+  :: Aria 成功揭开了深海遗迹的秘密。
+  Aria :: 终于……真相大白了。
+
+@scene ending_B
+  Aria :: 我会回来的。
+  :: 故事未完待续。
+
+@scene ending_C
+  Aria :: ……
+  :: 一切都结束了。
+
+@logic check_endings
+  [if Aria.stats.trust >= 5 and has_flag "saw_mural"]
+    [set ending = "A"]
+    -> scene.ending_A
+  [elif Aria.stats.alive = false]
+    [set ending = "C"]
+    -> scene.ending_C
+  [else]
+    [set ending = "B"]
+    -> scene.ending_B

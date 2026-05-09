@@ -1,0 +1,10 @@
+{
+  "name": "kni-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter kni-editor dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}
