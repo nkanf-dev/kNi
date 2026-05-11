@@ -145,21 +145,21 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 
 const kniHighlightStyle = HighlightStyle.define([
-  { tag: tags.keyword, color: '#c792ea', fontWeight: 'bold' },
-  { tag: tags.string, color: '#c3e88d' },
-  { tag: tags.comment, color: '#676e95', fontStyle: 'italic' },
-  { tag: tags.number, color: '#f78c6c' },
-  { tag: tags.operator, color: '#89ddff' },
-  { tag: tags.operatorKeyword, color: '#89ddff', fontWeight: 'bold' },
-  { tag: tags.atom, color: '#ffcb6b' },
-  { tag: tags.typeName, color: '#ffcb6b' },
-  { tag: tags.variableName, color: '#82aaff' },
-  { tag: tags.definitionKeyword, color: '#c792ea' },
-  { tag: tags.propertyName, color: '#80cbc4' },
-  { tag: tags.attributeName, color: '#c3e88d' },
-  { tag: tags.bool, color: '#f78c6c' },
-  { tag: tags.color, color: '#f78c6c' },
-  { tag: tags.meta, color: '#676e95' },
+  { tag: tags.keyword, color: '#b8a1d4', fontWeight: 'bold' },       // soft violet
+  { tag: tags.string, color: '#7ab89a' },                             // ink jade
+  { tag: tags.comment, color: '#4a453f', fontStyle: 'italic' },       // warm muted
+  { tag: tags.number, color: '#d4a46e' },                             // warm amber
+  { tag: tags.operator, color: '#7aacb8' },                           // ink cyan
+  { tag: tags.operatorKeyword, color: '#7aacb8', fontWeight: 'bold' },
+  { tag: tags.atom, color: '#c8a46e' },                               // gold accent
+  { tag: tags.typeName, color: '#c8a46e' },                           // gold accent
+  { tag: tags.variableName, color: '#8aadcc' },                       // muted blue
+  { tag: tags.definitionKeyword, color: '#b8a1d4' },                  // soft violet
+  { tag: tags.propertyName, color: '#8aaba0' },                       // muted teal
+  { tag: tags.attributeName, color: '#7ab89a' },                      // ink jade
+  { tag: tags.bool, color: '#d4a46e' },                               // warm amber
+  { tag: tags.color, color: '#d4a46e' },                              // warm amber
+  { tag: tags.meta, color: '#5a554e' },                               // warm gray
 ]);
 
 export const kniTheme = syntaxHighlighting(kniHighlightStyle);

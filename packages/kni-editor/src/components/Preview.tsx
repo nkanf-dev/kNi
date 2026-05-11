@@ -4,6 +4,7 @@ import type { RuntimeEvent } from 'kni-core';
 
 interface Props {
   content: string;
+  onSceneChange?: (scene: string) => void;
 }
 
 export function Preview(props: Props) {
@@ -15,10 +16,10 @@ export function Preview(props: Props) {
   const [waitingChoice, setWaitingChoice] = createSignal(false);
   const [choicePrompt, setChoicePrompt] = createSignal<string | null>(null);
   const [choiceOptions, setChoiceOptions] = createSignal<{ text: string; enabled: boolean }[]>([]);
+  const [ended, setEnded] = createSignal(false);
 
-  // Current display state
   const [speaker, setSpeaker] = createSignal('');
-  const [speakerColor, setSpeakerColor] = createSignal('#ffffff');
+  const [speakerColor, setSpeakerColor] = createSignal('#d4cbbf');
   const [text, setText] = createSignal('');
   const [bgImage, setBgImage] = createSignal('');
 
@@ -48,6 +49,7 @@ export function Preview(props: Props) {
       setDisplayIndex(0);
       setWaitingClick(false);
       setWaitingChoice(false);
+      setEnded(false);
       processToDisplay(0, initialEvents);
     } catch (e: any) {
       setError(e.message);
@@ -63,6 +65,7 @@ export function Preview(props: Props) {
       setDisplayIndex(0);
       setWaitingClick(false);
       setWaitingChoice(false);
+      setEnded(false);
       setSpeaker('');
       setText('');
       setBgImage('');
@@ -79,7 +82,7 @@ export function Preview(props: Props) {
     switch (ev.kind) {
       case 'DIALOG':
         setSpeaker(ev.charName || ev.char);
-        setSpeakerColor(ev.color || '#ffffff');
+        setSpeakerColor(ev.color || '#d4cbbf');
         setText(ev.text);
         setWaitingClick(true);
         setWaitingChoice(false);
@@ -97,12 +100,13 @@ export function Preview(props: Props) {
         setWaitingClick(false);
         break;
       case 'JUMP':
+        props.onSceneChange?.(ev.target);
         processToDisplay(idx + 1, evts);
-        break;
+        return;
       case 'ACTION':
         if (ev.type === 'bg') setBgImage(ev.target);
         processToDisplay(idx + 1, evts);
-        break;
+        return;
       case 'WAIT':
         setTimeout(() => processToDisplay(idx + 1, evts), 500);
         break;
@@ -110,6 +114,7 @@ export function Preview(props: Props) {
         setText('~ Fin ~');
         setSpeaker('');
         setWaitingClick(false);
+        setEnded(true);
         break;
       case 'ERROR':
         setText(`Error: ${ev.message}`);
@@ -122,8 +127,7 @@ export function Preview(props: Props) {
   function advance() {
     if (!waitingClick()) return;
     setWaitingClick(false);
-    const evts = events();
-    processToDisplay(displayIndex() + 1, evts);
+    processToDisplay(displayIndex() + 1, events());
   }
 
   function selectOption(index: number) {
@@ -141,47 +145,53 @@ export function Preview(props: Props) {
   }
 
   return (
-    <div
-      style="flex:1;display:flex;flex-direction:column;background:#0d0d1a;overflow:hidden"
-      onClick={(e) => {
-        if (!(e.target as HTMLElement).closest('.choices-area')) advance();
-      }}
-    >
+    <div class="preview-panel">
+      <div class="preview-panel-header">
+        <span>Preview</span>
+      </div>
+
       <Show when={error()}>
-        <div style="padding:16px;color:#ff6b6b;font-size:12px;font-family:monospace;white-space:pre-wrap;overflow:auto;max-height:200px">
-          {error()}
-        </div>
+        <div class="error-display">{error()}</div>
       </Show>
 
       <Show when={!error()}>
-        {/* Background */}
-        <div style={`flex:1;background:${bgImage() ? `url(${bgImage()}) center/cover` : '#0d0d1a'};position:relative`}>
+        <div
+          class="preview-viewport"
+          onClick={(e) => {
+            if (!(e.target as HTMLElement).closest('.preview-choices')) advance();
+          }}
+        >
+          {/* Background */}
+          <div
+            class="preview-bg"
+            style={bgImage() ? { 'background-image': `url(${bgImage()})` } : {}}
+          />
+
           {/* Dialog box */}
-          <div style="position:absolute;bottom:16px;left:16px;right:16px;background:rgba(0,0,0,0.85);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:16px 20px;min-height:80px">
+          <div class="preview-dialog">
             <Show when={speaker()}>
-              <div style={`font-weight:bold;font-size:13px;margin-bottom:4px;color:${speakerColor()}`}>
+              <div class="preview-speaker" style={{ color: speakerColor() }}>
                 {speaker()}
               </div>
             </Show>
-            <div style="font-size:14px;line-height:1.6;color:#e0e0e0;white-space:pre-wrap">
-              {text()}
-            </div>
+            <div class="preview-text">{text()}</div>
+            <Show when={waitingClick()}>
+              <div class="preview-indicator">{'\u25BC'}</div>
+            </Show>
           </div>
 
           {/* Choices */}
           <Show when={waitingChoice()}>
-            <div class="choices-area" style="position:absolute;bottom:120px;left:16px;right:16px;display:flex;flex-direction:column;gap:6px">
+            <div class="preview-choices">
               <Show when={choicePrompt()}>
-                <div style="background:rgba(0,0,0,0.7);padding:10px 14px;border-radius:6px;font-size:13px;color:#aaa;margin-bottom:4px">
-                  {choicePrompt()}
-                </div>
+                <div class="preview-choice-prompt">{choicePrompt()}</div>
               </Show>
               <For each={choiceOptions()}>
                 {(opt, i) => (
                   <button
+                    class="preview-choice-btn"
                     disabled={!opt.enabled}
                     onClick={(e) => { e.stopPropagation(); selectOption(i()); }}
-                    style={`padding:10px 16px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#e0e0e0;font-size:13px;cursor:${opt.enabled ? 'pointer' : 'not-allowed'};text-align:left;opacity:${opt.enabled ? 1 : 0.4}`}
                   >
                     {opt.text}
                   </button>
@@ -192,14 +202,12 @@ export function Preview(props: Props) {
         </div>
 
         {/* Controls */}
-        <div style="padding:8px 12px;background:#16162a;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px">
-          <button
-            onClick={restart}
-            style="padding:4px 12px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#888;font-size:11px;cursor:pointer"
-          >Restart</button>
-          <span style="flex:1" />
-          <span style="font-size:10px;color:#555">
-            {waitingClick() ? 'Click to continue' : waitingChoice() ? 'Choose an option' : ''}
+        <div class="preview-controls">
+          <button class="preview-control-btn" onClick={restart}>
+            Restart
+          </button>
+          <span class="preview-status">
+            {waitingClick() ? 'Click to continue' : waitingChoice() ? 'Choose an option' : ended() ? 'Story ended' : ''}
           </span>
         </div>
       </Show>

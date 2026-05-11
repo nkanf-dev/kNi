@@ -1,7 +1,14 @@
-import { createSignal, createEffect, Show, For } from 'solid-js';
+import { createSignal, createEffect, createMemo, Show, For, on } from 'solid-js';
+import { parse } from 'kni-core';
+import type { KniAST } from 'kni-core';
+import { PanelLayout } from './components/PanelLayout';
+import { Toolbar, type ViewMode } from './components/Toolbar';
+import { StatusBar } from './components/StatusBar';
+import { SceneTree } from './components/SceneTree';
+import { FileTree } from './components/FileTree';
 import { CodeEditor } from './components/CodeEditor';
 import { Preview } from './components/Preview';
-import { FileTree } from './components/FileTree';
+import { NodeGraph } from './components/NodeGraph';
 
 interface FileEntry {
   name: string;
@@ -142,13 +149,61 @@ const DEMO_SCRIPT = `@config
 `;
 
 export default function App() {
+  // ── File state ──
   const [files, setFiles] = createSignal<FileEntry[]>([
     { name: 'demo.kni', content: DEMO_SCRIPT, modified: false }
   ]);
   const [activeFile, setActiveFile] = createSignal(0);
-  const [showPreview, setShowPreview] = createSignal(true);
 
+  // ── View state ──
+  const [viewMode, setViewMode] = createSignal<ViewMode>('code');
+  const [showPreview, setShowPreview] = createSignal(true);
+  const [showConsole, setShowConsole] = createSignal(false);
+
+  // ── Cursor state ──
+  const [cursorLine, setCursorLine] = createSignal(1);
+  const [cursorCol, setCursorCol] = createSignal(1);
+
+  // ── Scene state ──
+  const [selectedScene, setSelectedScene] = createSignal<string | null>(null);
+  const [currentPlayScene, setCurrentPlayScene] = createSignal('');
+
+  // ── Derived ──
   const currentContent = () => files()[activeFile()]?.content ?? '';
+  const currentFile = () => files()[activeFile()];
+
+  // Parse AST reactively
+  const ast = createMemo<KniAST | null>(() => {
+    try {
+      return parse(currentContent());
+    } catch {
+      return null;
+    }
+  });
+
+  // Parse error
+  const parseError = createMemo<string | null>(() => {
+    try {
+      parse(currentContent());
+      return null;
+    } catch (e: any) {
+      return e.message;
+    }
+  });
+
+  // Word count
+  const wordCount = createMemo(() => {
+    const content = currentContent();
+    return content.trim() ? content.trim().split(/\s+/).length : 0;
+  });
+
+  // Scene count
+  const sceneCount = createMemo(() => {
+    const a = ast();
+    return a ? Object.keys(a.scenes).length + Object.keys(a.logic).length : 0;
+  });
+
+  // ── Actions ──
 
   function updateContent(content: string) {
     setFiles(prev => prev.map((f, i) =>
@@ -159,71 +214,152 @@ export default function App() {
   function addFile() {
     const name = prompt('File name:', 'new.kni');
     if (!name) return;
-    setFiles(prev => [...prev, { name, content: '@config\n  title: "Untitled"\n  start: scene.main\n\n@scene main\n  :: Hello world.\n', modified: false }]);
+    setFiles(prev => [...prev, {
+      name,
+      content: '@config\n  title: "Untitled"\n  start: scene.main\n\n@scene main\n  :: Hello world.\n',
+      modified: false
+    }]);
     setActiveFile(files().length - 1);
   }
 
   function deleteFile(idx: number) {
     if (files().length <= 1) return;
     setFiles(prev => prev.filter((_, i) => i !== idx));
-    if (activeFile() >= files().length - 1) setActiveFile(files().length - 2);
+    if (activeFile() >= files().length - 1) setActiveFile(Math.max(0, files().length - 2));
   }
 
-  return (
-    <div style="display:flex;height:100%;width:100%">
-      {/* Sidebar */}
-      <div style="width:200px;background:#16162a;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;flex-shrink:0">
-        <div style="padding:12px;font-size:13px;font-weight:bold;color:#82aaff;border-bottom:1px solid rgba(255,255,255,0.08)">
-          kNi Editor
-        </div>
-        <FileTree
-          files={files()}
-          active={activeFile()}
-          onSelect={setActiveFile}
-          onAdd={addFile}
-          onDelete={deleteFile}
-        />
-      </div>
+  function onSceneSelect(name: string, kind: 'scene' | 'logic') {
+    setSelectedScene(name);
+    // In code view, could scroll to the scene definition
+    // For now just highlight it
+  }
 
-      {/* Editor + Preview */}
-      <div style="flex:1;display:flex;min-width:0">
-        <div style="flex:1;display:flex;flex-direction:column;min-width:0">
-          {/* Tabs */}
-          <div style="display:flex;background:#1a1a2e;border-bottom:1px solid rgba(255,255,255,0.08)">
+  function onNodeDoubleClick(id: string) {
+    setViewMode('code');
+    setSelectedScene(id);
+    // Could scroll code editor to the scene
+  }
+
+  function onCursorChange(line: number, col: number) {
+    setCursorLine(line);
+    setCursorCol(col);
+  }
+
+  // Restart trigger (bumped to force Preview to restart)
+  const [restartKey, setRestartKey] = createSignal(0);
+  function triggerRestart() {
+    setRestartKey(k => k + 1);
+  }
+
+  // ── Render ──
+
+  return (
+    <PanelLayout
+      toolbar={
+        <Toolbar
+          fileName={currentFile()?.name ?? ''}
+          modified={currentFile()?.modified ?? false}
+          viewMode={viewMode()}
+          onViewModeChange={setViewMode}
+          showPreview={showPreview()}
+          onTogglePreview={() => setShowPreview(p => !p)}
+          onToggleConsole={() => setShowConsole(p => !p)}
+          onRestart={triggerRestart}
+        />
+      }
+      left={
+        <>
+          <SceneTree
+            ast={ast()}
+            selectedScene={selectedScene()}
+            onSelect={onSceneSelect}
+          />
+          <div style="border-top:1px solid var(--ink-border)">
+            <FileTree
+              files={files()}
+              active={activeFile()}
+              onSelect={setActiveFile}
+              onAdd={addFile}
+              onDelete={deleteFile}
+            />
+          </div>
+        </>
+      }
+      center={
+        <>
+          {/* File tabs */}
+          <div class="tab-bar">
             <For each={files()}>
               {(file, i) => (
                 <button
+                  class={`tab ${i() === activeFile() ? 'active' : ''}`}
                   onClick={() => setActiveFile(i())}
-                  style={`padding:8px 16px;font-size:12px;border:none;cursor:pointer;background:${i() === activeFile() ? '#252540' : 'transparent'};color:${i() === activeFile() ? '#e0e0e0' : '#888'};border-right:1px solid rgba(255,255,255,0.05)`}
                 >
-                  {file.modified ? '* ' : ''}{file.name}
+                  {file.modified && <span class="tab-modified">&bull;</span>}
+                  {file.name}
                 </button>
               )}
             </For>
           </div>
-          {/* Code Editor */}
-          <div style="flex:1;min-height:0">
-            <CodeEditor
-              value={currentContent()}
-              onChange={updateContent}
-            />
-          </div>
-        </div>
 
-        {/* Preview Panel */}
-        <Show when={showPreview()}>
-          <div style="width:450px;border-left:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;flex-shrink:0">
-            <div style="padding:8px 12px;font-size:12px;background:#16162a;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center">
-              <span>Preview</span>
-              <button
-                onClick={() => setShowPreview(false)}
-                style="background:none;border:none;color:#888;cursor:pointer;font-size:14px"
-              >×</button>
-            </div>
-            <Preview content={currentContent()} />
+          {/* Main content area */}
+          <div class="panel-center-content">
+            <Show when={viewMode() === 'code'}>
+              <CodeEditor
+                value={currentContent()}
+                onChange={updateContent}
+                onCursorChange={onCursorChange}
+              />
+            </Show>
+            <Show when={viewMode() === 'graph'}>
+              <NodeGraph
+                ast={ast()}
+                selectedNode={selectedScene()}
+                onSelectNode={setSelectedScene}
+                onDoubleClickNode={onNodeDoubleClick}
+              />
+            </Show>
           </div>
-        </Show>
-      </div>
-    </div>
+        </>
+      }
+      right={
+        showPreview() ? (
+          <Preview
+            content={currentContent()}
+            onSceneChange={setCurrentPlayScene}
+          />
+        ) : undefined
+      }
+      bottom={
+        showConsole() ? (
+          <div class="console-panel">
+            <div class="console-header">
+              <span>Console</span>
+              <button class="sidebar-header-btn" onClick={() => setShowConsole(false)}>&times;</button>
+            </div>
+            <div class="console-body">
+              <Show when={parseError()}>
+                <div class="console-entry error">{parseError()}</div>
+              </Show>
+              <Show when={!parseError()}>
+                <div class="console-entry" style="color:var(--ink-jade)">Parse OK — {sceneCount()} scenes</div>
+              </Show>
+            </div>
+          </div>
+        ) : undefined
+      }
+      bottomHeight={showConsole() ? 160 : 0}
+      statusbar={
+        <StatusBar
+          currentScene={currentPlayScene() || selectedScene() || ''}
+          cursorLine={cursorLine()}
+          cursorCol={cursorCol()}
+          wordCount={wordCount()}
+          sceneCount={sceneCount()}
+          parseOk={!parseError()}
+          errorCount={parseError() ? 1 : 0}
+        />
+      }
+    />
   );
 }

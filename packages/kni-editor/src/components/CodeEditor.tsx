@@ -8,6 +8,7 @@ import { kni, kniTheme } from 'kni-lang';
 interface Props {
   value: string;
   onChange: (value: string) => void;
+  onCursorChange?: (line: number, col: number) => void;
 }
 
 export function CodeEditor(props: Props) {
@@ -18,6 +19,11 @@ export function CodeEditor(props: Props) {
     const updateListener = EditorView.updateListener.of(update => {
       if (update.docChanged) {
         props.onChange(update.state.doc.toString());
+      }
+      if (update.selectionSet && props.onCursorChange) {
+        const pos = update.state.selection.main.head;
+        const line = update.state.doc.lineAt(pos);
+        props.onCursorChange(line.number, pos - line.from + 1);
       }
     });
 
@@ -38,8 +44,6 @@ export function CodeEditor(props: Props) {
           EditorView.theme({
             '&': { height: '100%' },
             '.cm-scroller': { overflow: 'auto' },
-            '.cm-content': { fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: '13px' },
-            '.cm-gutters': { background: '#1a1a2e', borderRight: '1px solid rgba(255,255,255,0.06)' }
           }),
         ],
       }),
@@ -59,4 +63,13 @@ export function CodeEditor(props: Props) {
   onCleanup(() => view?.destroy());
 
   return <div ref={container} style="height:100%" />;
+}
+
+// Utility: scroll to a line in the editor
+export function scrollToLine(view: EditorView, lineNumber: number) {
+  const line = view.state.doc.line(Math.min(lineNumber, view.state.doc.lines));
+  view.dispatch({
+    selection: { anchor: line.from },
+    effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+  });
 }
