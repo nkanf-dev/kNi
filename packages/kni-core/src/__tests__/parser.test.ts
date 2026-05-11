@@ -74,11 +74,13 @@ describe('parse', () => {
     expect(ast.scenes.intro).toBeDefined();
     const body = ast.scenes.intro.body;
     expect(body).toHaveLength(3);
-    expect(body[0]).toEqual({ kind: 'narration', text: 'Hello world.', modifiers: [] });
-    expect(body[1]).toEqual({ kind: 'dialog', char: 'Hero', text: 'I am here.', modifiers: [] });
+    expect(body[0]).toEqual({ kind: 'narration', text: 'Hello world.', segments: [{ kind: 'text', content: 'Hello world.' }], modifiers: [] });
+    expect(body[1]).toEqual({ kind: 'dialog', char: 'Hero', text: 'I am here.', segments: [{ kind: 'text', content: 'I am here.' }], modifiers: [], voice: undefined });
     expect(body[2]).toEqual({
       kind: 'dialog', char: 'Hero', text: 'Be quiet.',
+      segments: [{ kind: 'text', content: 'Be quiet.' }],
       modifiers: [{ type: 'whisper', args: [] }],
+      voice: undefined,
     });
   });
 

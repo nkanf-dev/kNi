@@ -1,15 +1,22 @@
 // ── kNi DSL Type System ──
+// Designed for migration compatibility with RenPy, KiriKiri/KAG, and A-sha engines.
 
-// ---- Config ----
+// ──────────────────────────────────────────────
+// Config
+// ──────────────────────────────────────────────
+
 export interface KniConfig {
   title: string;
   author: string;
   version: number;
-  start: string; // e.g. "scene.intro"
+  start: string;            // e.g. "scene.intro"
   lang: string;
 }
 
-// ---- Characters ----
+// ──────────────────────────────────────────────
+// Characters
+// ──────────────────────────────────────────────
+
 export interface CharStats {
   [key: string]: number | boolean | string;
 }
@@ -22,7 +29,10 @@ export interface CharDef {
   stats: CharStats;
 }
 
-// ---- Items ----
+// ──────────────────────────────────────────────
+// Items
+// ──────────────────────────────────────────────
+
 export interface ItemDef {
   name: string;
   desc: string;
@@ -31,25 +41,70 @@ export interface ItemDef {
   tags: string[];
 }
 
-// ---- Variables ----
+// ──────────────────────────────────────────────
+// Variables
+// ──────────────────────────────────────────────
+
 export interface VarDef {
   [name: string]: number | string | boolean | string[];
 }
 
-// ---- Define block ----
+// ──────────────────────────────────────────────
+// Define block
+// ──────────────────────────────────────────────
+
 export interface DefineBlock {
   chars: Record<string, CharDef>;
   items: Record<string, ItemDef>;
   vars: VarDef;
+  persistVars: VarDef;      // Cross-playthrough persistent variables
 }
 
-// ---- Performance modifiers ----
+// ──────────────────────────────────────────────
+// Performance modifiers
+// ──────────────────────────────────────────────
+
 export interface Modifier {
-  type: string; // shake, flash, whisper, delay, etc.
+  type: string;             // shake, flash, whisper, delay, etc.
   args: string[];
 }
 
-// ---- AST Nodes ----
+// ──────────────────────────────────────────────
+// Text Segments — inline markup in dialog/narration
+// ──────────────────────────────────────────────
+
+export type TextSegment =
+  | { kind: 'text'; content: string }
+  | { kind: 'ruby'; base: string; annotation: string }        // furigana
+  | { kind: 'style'; tag: TextStyleTag; children: TextSegment[] }
+  | { kind: 'speed'; speed: number; children: TextSegment[] }
+  | { kind: 'color'; color: string; children: TextSegment[] }
+  | { kind: 'wait'; duration: number };                         // inline pause
+
+export type TextStyleTag = 'b' | 'i' | 'u' | 's';
+
+// ──────────────────────────────────────────────
+// Layers & Sprites — RenPy/KiriKiri layer model
+// ──────────────────────────────────────────────
+
+export type SpritePosition = 'left' | 'center' | 'right' | 'far_left' | 'far_right' | { x: number; y: number };
+export type TransitionType = 'none' | 'fade' | 'dissolve' | 'slide_left' | 'slide_right' | 'slide_up' | 'slide_down' | 'wipe' | 'blinds' | 'pixelate';
+
+export interface TransitionDef {
+  type: TransitionType;
+  duration: number;         // seconds
+}
+
+// ──────────────────────────────────────────────
+// Audio — multi-channel audio system
+// ──────────────────────────────────────────────
+
+export type AudioChannel = 'bgm' | 'se' | 'voice';
+export type AudioAction = 'play' | 'stop' | 'pause' | 'resume' | 'crossfade' | 'volume';
+
+// ──────────────────────────────────────────────
+// AST Nodes
+// ──────────────────────────────────────────────
 
 export type ASTNode =
   | DialogNode
@@ -60,18 +115,22 @@ export type ASTNode =
   | ActionNode
   | WaitNode
   | LabelNode
+  | ReturnNode
   | ConditionalNode;
 
 export interface DialogNode {
   kind: "dialog";
   char: string;
   text: string;
+  segments: TextSegment[];    // parsed inline markup (empty = plain text)
   modifiers: Modifier[];
+  voice?: string;             // per-line voice file
 }
 
 export interface NarrationNode {
   kind: "narration";
   text: string;
+  segments: TextSegment[];
   modifiers: Modifier[];
 }
 
@@ -79,6 +138,7 @@ export interface ChoiceNode {
   kind: "choice";
   prompt: string | null;
   options: OptionNode[];
+  timed?: number;             // optional timeout in seconds
 }
 
 export interface OptionNode {
@@ -86,37 +146,58 @@ export interface OptionNode {
   text: string;
   condition: Condition | null;
   actions: ActionNode[];
-  target: string | null; // scene name or null
+  target: string | null;
 }
 
 export interface JumpNode {
   kind: "jump";
-  target: string; // scene name
+  target: string;
+}
+
+export interface ReturnNode {
+  kind: "return";
 }
 
 export interface ActionNode {
   kind: "action";
   type: ActionType;
-  target: string; // e.g. "Aria.stats.trust", "item.keycard", "ending"
-  value?: string; // for set, the new value
-  args?: string[]; // for sfx, shake, etc.
+  target: string;
+  value?: string;
+  args?: string[];
 }
 
 export type ActionType =
+  // State mutations
   | "give"
   | "remove"
   | "set"
   | "add_flag"
   | "del_flag"
+  // Sprite/Layer system
+  | "show"          // [show Aria center with dissolve]
+  | "hide"          // [hide Aria with fade]
+  | "move"          // [move Aria right 0.5]
+  // Transitions
+  | "transition"    // [transition fade 0.8]
+  // Audio
+  | "bgm"           // [bgm play track.ogg] [bgm stop] [bgm crossfade track2.ogg 1.0]
+  | "se"            // [se play click.ogg]
+  | "voice"         // [voice play aria_001.ogg]
+  // Visual effects
   | "sfx"
   | "shake"
-  | "call"
+  | "flash"         // [flash 0.3 #ff0000]
+  // Scene/flow
+  | "call"          // [call logic.check_endings]
   | "bg"
-  | "music"
-  | "wait";
+  | "music"         // legacy alias for bgm
+  // Wait variants
+  | "wait";         // [wait], [wait 1.5], [wait click], [wait transition]
 
 export interface WaitNode {
-  kind: "wait"; // ---
+  kind: "wait";
+  waitType?: 'click' | 'time' | 'transition' | 'animation';
+  duration?: number;
 }
 
 export interface LabelNode {
@@ -125,7 +206,7 @@ export interface LabelNode {
 }
 
 export interface ConditionalBranch {
-  condition: Condition | null; // null for else
+  condition: Condition | null;  // null for else
   body: ASTNode[];
 }
 
@@ -134,17 +215,22 @@ export interface ConditionalNode {
   branches: ConditionalBranch[];
 }
 
-// ---- Conditions ----
+// ──────────────────────────────────────────────
+// Conditions
+// ──────────────────────────────────────────────
+
 export type Condition =
   | BinaryCondition
   | FlagCondition
   | NotCondition
   | AndCondition
-  | OrCondition;
+  | OrCondition
+  | HasItemCondition
+  | ChoiceSelectedCondition;
 
 export interface BinaryCondition {
   kind: "binary";
-  left: string; // path like "Aria.stats.trust"
+  left: string;
   op: ">=" | ">" | "<=" | "<" | "=" | "!=";
   right: string | number | boolean;
 }
@@ -152,6 +238,16 @@ export interface BinaryCondition {
 export interface FlagCondition {
   kind: "has_flag";
   flag: string;
+}
+
+export interface HasItemCondition {
+  kind: "has_item";
+  item: string;
+}
+
+export interface ChoiceSelectedCondition {
+  kind: "choice_selected";
+  choiceId: string;           // track which choices player has made
 }
 
 export interface NotCondition {
@@ -171,7 +267,10 @@ export interface OrCondition {
   right: Condition;
 }
 
-// ---- Scene ----
+// ──────────────────────────────────────────────
+// Scene
+// ──────────────────────────────────────────────
+
 export interface SceneDef {
   name: string;
   bg: string;
@@ -180,13 +279,19 @@ export interface SceneDef {
   body: ASTNode[];
 }
 
-// ---- Logic ----
+// ──────────────────────────────────────────────
+// Logic
+// ──────────────────────────────────────────────
+
 export interface LogicDef {
   name: string;
   body: ASTNode[];
 }
 
-// ---- Full AST ----
+// ──────────────────────────────────────────────
+// Full AST
+// ──────────────────────────────────────────────
+
 export interface KniAST {
   config: KniConfig | null;
   define: DefineBlock | null;
@@ -194,13 +299,32 @@ export interface KniAST {
   logic: Record<string, LogicDef>;
 }
 
-// ---- Runtime Events (Renderer-facing) ----
+// ──────────────────────────────────────────────
+// Runtime Events (Renderer-facing)
+// ──────────────────────────────────────────────
+
 export type RuntimeEvent =
-  | { kind: "DIALOG"; char: string; charName: string; text: string; modifiers: Modifier[]; portrait: string; color: string }
-  | { kind: "NARRATION"; text: string; modifiers: Modifier[] }
-  | { kind: "CHOICE"; prompt: string | null; options: { text: string; enabled: boolean }[] }
+  // Text
+  | { kind: "DIALOG"; char: string; charName: string; text: string; segments: TextSegment[]; modifiers: Modifier[]; portrait: string; color: string; voice?: string }
+  | { kind: "NARRATION"; text: string; segments: TextSegment[]; modifiers: Modifier[] }
+  // Interaction
+  | { kind: "CHOICE"; prompt: string | null; options: { text: string; enabled: boolean; selected?: boolean }[]; timed?: number }
+  // Layer/Sprite
+  | { kind: "SHOW"; target: string; position: SpritePosition; transition: TransitionDef; layer?: string; expression?: string }
+  | { kind: "HIDE"; target: string; transition: TransitionDef }
+  | { kind: "MOVE"; target: string; position: SpritePosition; duration: number }
+  // Scene
+  | { kind: "TRANSITION"; transition: TransitionDef }
+  | { kind: "BG"; target: string; transition: TransitionDef }
   | { kind: "JUMP"; target: string }
+  // Audio
+  | { kind: "AUDIO"; channel: AudioChannel; action: AudioAction; target?: string; duration?: number; volume?: number }
+  // Effects
   | { kind: "ACTION"; type: ActionType; target: string; value?: string; args?: string[] }
-  | { kind: "WAIT" }
+  | { kind: "SHAKE"; target: string; duration: number; intensity?: number }
+  | { kind: "FLASH"; duration: number; color?: string }
+  // Wait
+  | { kind: "WAIT"; waitType?: 'click' | 'time' | 'transition' | 'animation'; duration?: number }
+  // Flow
   | { kind: "END" }
   | { kind: "ERROR"; message: string };

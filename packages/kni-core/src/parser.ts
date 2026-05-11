@@ -1,7 +1,7 @@
 import type {
   KniAST, KniConfig, DefineBlock, CharDef, ItemDef,
   SceneDef, LogicDef, ASTNode, ActionNode, Condition,
-  BinaryCondition, Modifier, ConditionalBranch
+  BinaryCondition, Modifier, ConditionalBranch, TextSegment, OptionNode
 } from './types.js';
 
 // ── Lexer ──
@@ -9,12 +9,13 @@ import type {
 type Token =
   | { kind: 'SECTION'; name: string }
   | { kind: 'KEY_VALUE'; key: string; value: string; indent: number }
-  | { kind: 'DIALOG'; char: string; text: string; modifiers: string }
+  | { kind: 'DIALOG'; char: string; text: string; modifiers: string; voice?: string }
   | { kind: 'NARRATION'; text: string; modifiers: string }
-  | { kind: 'CHOICE_PROMPT'; prompt: string }
+  | { kind: 'CHOICE_PROMPT'; prompt: string; timed?: number }
   | { kind: 'OPTION'; text: string }
   | { kind: 'CONDITION'; raw: string }
   | { kind: 'JUMP'; target: string }
+  | { kind: 'RETURN' }
   | { kind: 'ACTION'; raw: string }
   | { kind: 'WAIT' }
   | { kind: 'BLANK' }
@@ -55,16 +56,31 @@ function* tokenize(input: string): Generator<Token> {
       continue;
     }
 
+    // Return: <- or [return]
+    if (trimmed === '<-' || trimmed === '[return]') {
+      yield { kind: 'RETURN' };
+      continue;
+    }
+
     // Wait: ---
     if (trimmed === '---') {
       yield { kind: 'WAIT' };
       continue;
     }
 
-    // Choice prompt: ? "text"
+    // End marker: ~ End ~ or ~ Fin ~
+    if (/^~\s*(End|Fin|END|FIN)\s*~$/.test(trimmed)) {
+      yield { kind: 'SECTION', name: '__end__' };
+      continue;
+    }
+
+    // Choice prompt: ? "text" or ? "text" [timeout 5]
     if (trimmed.startsWith('?')) {
-      const prompt = trimmed.slice(1).trim().replace(/^"|"$/g, '');
-      yield { kind: 'CHOICE_PROMPT', prompt };
+      const raw = trimmed.slice(1).trim();
+      const timeMatch = raw.match(/\[timeout\s+(\d+(?:\.\d+)?)\]\s*$/);
+      const prompt = (timeMatch ? raw.slice(0, timeMatch.index).trim() : raw).replace(/^"|"$/g, '');
+      const timed = timeMatch ? parseFloat(timeMatch[1]) : undefined;
+      yield { kind: 'CHOICE_PROMPT', prompt, timed };
       continue;
     }
 
@@ -82,7 +98,14 @@ function* tokenize(input: string): Generator<Token> {
       continue;
     }
 
-    // Dialog: Char :: (modifier) text
+    // Dialog: Char :: (modifier) text  or  Char [voice/file.ogg] :: text
+    const dialogVoiceMatch = trimmed.match(/^(.+?)\s*\[voice\s+([^\]]+)\]\s*::\s*(?:\(([^)]*)\)\s*)?(.+)$/);
+    if (dialogVoiceMatch) {
+      const [, char, voice, modifiers, text] = dialogVoiceMatch;
+      yield { kind: 'DIALOG', char: char.trim(), text: text.trim(), modifiers: modifiers || '', voice };
+      continue;
+    }
+
     const dialogMatch = trimmed.match(/^(.+?)\s*::\s*(?:\(([^)]*)\)\s*)?(.+)$/);
     if (dialogMatch) {
       const [, char, modifiers, text] = dialogMatch;
@@ -99,6 +122,13 @@ function* tokenize(input: string): Generator<Token> {
     const itemMatch = trimmed.match(/^item\s+(\w+)\s*:?\s*$/);
     if (itemMatch) {
       yield { kind: 'KEY_VALUE', key: 'item', value: itemMatch[1], indent };
+      continue;
+    }
+
+    // Persistent variable: persist <name>: <value>
+    const persistMatch = trimmed.match(/^persist\s+(\w+)\s*:\s*(.+)$/);
+    if (persistMatch) {
+      yield { kind: 'KEY_VALUE', key: 'persist', value: `${persistMatch[1]}: ${persistMatch[2].trim()}`, indent };
       continue;
     }
 
@@ -153,6 +183,7 @@ export function parse(input: string): KniAST {
     if (t.kind === 'SECTION') {
       const sectionName = t.name;
       advance(); // consume the section token
+      if (sectionName === '__end__') continue; // ~ End ~ marker
       if (sectionName === 'config') parseConfig(ast, advance, peek);
       else if (sectionName.startsWith('define')) parseDefine(ast, advance, peek);
       else if (sectionName.startsWith('scene')) parseScene(ast, sectionName.replace(/^scene\s+/, '').trim(), advance, peek);
@@ -189,7 +220,7 @@ function parseConfig(ast: KniAST, advance: Advance, peek: Peek) {
 // ── @define ──
 
 function parseDefine(ast: KniAST, advance: Advance, peek: Peek) {
-  const define: DefineBlock = { chars: {}, items: {}, vars: {} };
+  const define: DefineBlock = { chars: {}, items: {}, vars: {}, persistVars: {} };
 
   while (true) {
     const t = peek();
@@ -208,11 +239,17 @@ function parseDefine(ast: KniAST, advance: Advance, peek: Peek) {
         define.items[itemId] = parseItemBlock(advance, peek);
         continue;
       } else if (t.key === 'var') {
-        // "var chapter: 1" → key="var", value="chapter: 1"
         const parts = t.value.split(':');
         const varName = parts[0].trim();
         const varVal = parts.length > 1 ? parts.slice(1).join(':').trim() : '';
         define.vars[varName] = parseVarValue(varVal);
+        advance();
+        continue;
+      } else if (t.key === 'persist') {
+        const parts = t.value.split(':');
+        const varName = parts[0].trim();
+        const varVal = parts.length > 1 ? parts.slice(1).join(':').trim() : '';
+        define.persistVars[varName] = parseVarValue(varVal);
         advance();
         continue;
       }
@@ -238,7 +275,6 @@ function parseCharBlock(advance: Advance, peek: Peek): CharDef {
       else if (t.key === 'voice') { char.voice = t.value; advance(); }
       else if (t.key === 'stats') {
         advance();
-        // Parse indented stats block
         while (true) {
           const st = peek();
           if (st.kind === 'BLANK') { advance(); continue; }
@@ -253,7 +289,7 @@ function parseCharBlock(advance: Advance, peek: Peek): CharDef {
           }
         }
       }
-      else { break; } // Unknown key — exit char block
+      else { break; }
     } else {
       break;
     }
@@ -330,7 +366,9 @@ function parseBody(advance: Advance, peek: Peek): ASTNode[] {
           kind: 'dialog',
           char: t.char,
           text: t.text,
-          modifiers: parseModifiers(t.modifiers)
+          segments: parseTextSegments(t.text),
+          modifiers: parseModifiers(t.modifiers),
+          voice: t.voice,
         });
         advance();
         break;
@@ -339,6 +377,7 @@ function parseBody(advance: Advance, peek: Peek): ASTNode[] {
         nodes.push({
           kind: 'narration',
           text: t.text,
+          segments: parseTextSegments(t.text),
           modifiers: parseModifiers(t.modifiers)
         });
         advance();
@@ -346,13 +385,19 @@ function parseBody(advance: Advance, peek: Peek): ASTNode[] {
       }
       case 'CHOICE_PROMPT': {
         const prompt = t.prompt;
+        const timed = t.timed;
         advance();
         const options = parseOptions(advance, peek);
-        nodes.push({ kind: 'choice', prompt: prompt || null, options });
+        nodes.push({ kind: 'choice', prompt: prompt || null, options, timed });
         break;
       }
       case 'JUMP': {
         nodes.push({ kind: 'jump', target: t.target });
+        advance();
+        break;
+      }
+      case 'RETURN': {
+        nodes.push({ kind: 'return' });
         advance();
         break;
       }
@@ -363,8 +408,7 @@ function parseBody(advance: Advance, peek: Peek): ASTNode[] {
         break;
       }
       case 'CONDITION': {
-        // Standalone condition in a logic block (if/elif/else)
-        advance(); // consume the CONDITION token
+        advance();
         const condNode = parseConditionBlock(t.raw, advance, peek);
         if (condNode) nodes.push(...condNode);
         break;
@@ -398,13 +442,11 @@ function parseOptions(advance: Advance, peek: Peek): OptionNode[] {
     const optionActions: ActionNode[] = [];
     let target: string | null = null;
 
-    // Collect inline content after the option
     while (true) {
       const at = peek();
       if (at.kind === 'BLANK') { advance(); continue; }
 
       if (at.kind === 'CONDITION') {
-        // [if ...] on the next line — applies to this option
         condition = parseCondition(at.raw.replace(/^if\s+/, ''));
         advance();
       } else if (at.kind === 'ACTION') {
@@ -414,7 +456,7 @@ function parseOptions(advance: Advance, peek: Peek): OptionNode[] {
       } else if (at.kind === 'JUMP') {
         target = at.target;
         advance();
-        break; // Option complete
+        break;
       } else {
         break;
       }
@@ -436,13 +478,11 @@ function parseOptions(advance: Advance, peek: Peek): OptionNode[] {
 function parseConditionBlock(raw: string, advance: Advance, peek: Peek): ASTNode[] {
   const branches: ConditionalBranch[] = [];
 
-  // Strip "if " / "elif " prefix
   const condText = raw.startsWith('if ') ? raw.slice(3) : raw.startsWith('elif ') ? raw.slice(5) : raw;
   const firstCond = raw === 'else' ? null : parseCondition(condText);
   const firstBody = collectConditionBody(advance, peek);
   branches.push({ condition: firstCond, body: firstBody });
 
-  // Parse elif/else branches
   while (true) {
     const t = peek();
     if (t.kind === 'BLANK') { advance(); continue; }
@@ -468,6 +508,8 @@ function collectConditionBody(advance: Advance, peek: Peek): ASTNode[] {
       if (parsed) nodes.push(parsed);
     } else if (t.kind === 'JUMP') {
       nodes.push({ kind: 'jump', target: t.target });
+    } else if (t.kind === 'RETURN') {
+      nodes.push({ kind: 'return' });
     }
     advance();
   }
@@ -484,9 +526,118 @@ function parseModifiers(raw: string): Modifier[] {
   });
 }
 
+// ── Text Segments — inline markup parsing ──
+// Syntax: {b}bold{/b}, {i}italic{/i}, {ruby base|annotation}, {speed 0.5}slow{/speed}, {color #ff0000}red{/color}, {w 0.5} (inline wait)
+
+export function parseTextSegments(text: string): TextSegment[] {
+  // If no tags found, return single text segment
+  if (!text.includes('{')) return [{ kind: 'text', content: text }];
+
+  const segments: TextSegment[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    const tagStart = text.indexOf('{', i);
+    if (tagStart === -1) {
+      if (i < text.length) segments.push({ kind: 'text', content: text.slice(i) });
+      break;
+    }
+
+    // Text before tag
+    if (tagStart > i) {
+      segments.push({ kind: 'text', content: text.slice(i, tagStart) });
+    }
+
+    const tagEnd = text.indexOf('}', tagStart);
+    if (tagEnd === -1) {
+      segments.push({ kind: 'text', content: text.slice(tagStart) });
+      break;
+    }
+
+    const tagContent = text.slice(tagStart + 1, tagEnd);
+
+    // Closing tags: {/b}, {/i}, etc. — handled by parent parse
+    if (tagContent.startsWith('/')) {
+      i = tagEnd + 1;
+      continue;
+    }
+
+    // Ruby: {ruby base|annotation}
+    const rubyMatch = tagContent.match(/^ruby\s+(.+?)\|(.+)$/);
+    if (rubyMatch) {
+      segments.push({ kind: 'ruby', base: rubyMatch[1], annotation: rubyMatch[2] });
+      i = tagEnd + 1;
+      continue;
+    }
+
+    // Inline wait: {w 0.5} or {w}
+    const waitMatch = tagContent.match(/^w(?:\s+(\d+(?:\.\d+)?))?$/);
+    if (waitMatch) {
+      segments.push({ kind: 'wait', duration: waitMatch[1] ? parseFloat(waitMatch[1]) : 0.5 });
+      i = tagEnd + 1;
+      continue;
+    }
+
+    // Style tags: {b}, {i}, {u}, {s}
+    if (['b', 'i', 'u', 's'].includes(tagContent)) {
+      const closeTag = `{/${tagContent}}`;
+      const closeIdx = text.indexOf(closeTag, tagEnd + 1);
+      if (closeIdx !== -1) {
+        const inner = text.slice(tagEnd + 1, closeIdx);
+        segments.push({
+          kind: 'style',
+          tag: tagContent as 'b' | 'i' | 'u' | 's',
+          children: parseTextSegments(inner)
+        });
+        i = closeIdx + closeTag.length;
+        continue;
+      }
+    }
+
+    // Speed: {speed 0.5}...{/speed}
+    const speedMatch = tagContent.match(/^speed\s+(\d+(?:\.\d+)?)$/);
+    if (speedMatch) {
+      const closeTag = '{/speed}';
+      const closeIdx = text.indexOf(closeTag, tagEnd + 1);
+      if (closeIdx !== -1) {
+        const inner = text.slice(tagEnd + 1, closeIdx);
+        segments.push({
+          kind: 'speed',
+          speed: parseFloat(speedMatch[1]),
+          children: parseTextSegments(inner)
+        });
+        i = closeIdx + closeTag.length;
+        continue;
+      }
+    }
+
+    // Color: {color #ff0000}...{/color}
+    const colorMatch = tagContent.match(/^color\s+(#[0-9a-fA-F]{3,8}|\w+)$/);
+    if (colorMatch) {
+      const closeTag = '{/color}';
+      const closeIdx = text.indexOf(closeTag, tagEnd + 1);
+      if (closeIdx !== -1) {
+        const inner = text.slice(tagEnd + 1, closeIdx);
+        segments.push({
+          kind: 'color',
+          color: colorMatch[1],
+          children: parseTextSegments(inner)
+        });
+        i = closeIdx + closeTag.length;
+        continue;
+      }
+    }
+
+    // Unknown tag — treat as plain text
+    segments.push({ kind: 'text', content: text.slice(tagStart, tagEnd + 1) });
+    i = tagEnd + 1;
+  }
+
+  return segments;
+}
+
 // ── Conditions ──
 
-// Find a logical operator outside of quoted strings
 function findLogicalOp(raw: string, op: string): number {
   let inQuote = false;
   for (let i = 0; i <= raw.length - op.length; i++) {
@@ -497,8 +648,6 @@ function findLogicalOp(raw: string, op: string): number {
 }
 
 function parseCondition(raw: string): Condition {
-  // Handle "and" / "or" FIRST (before has_flag, so compound conditions work)
-  // Split on " and " / " or " but respect quoted strings
   const andIdx = findLogicalOp(raw, ' and ');
   if (andIdx > 0) {
     return {
@@ -520,7 +669,15 @@ function parseCondition(raw: string): Condition {
   const flagMatch = raw.match(/has_flag\s+"([^"]+)"/);
   if (flagMatch) return { kind: 'has_flag', flag: flagMatch[1] };
 
-  // Binary comparisons: try longest operators first
+  // has_item "name" or has_item item.name
+  const itemMatch = raw.match(/has_item\s+(?:"([^"]+)"|(\S+))/);
+  if (itemMatch) return { kind: 'has_item', item: (itemMatch[1] || itemMatch[2]).replace('item.', '') };
+
+  // choice_selected "id"
+  const choiceMatch = raw.match(/choice_selected\s+"([^"]+)"/);
+  if (choiceMatch) return { kind: 'choice_selected', choiceId: choiceMatch[1] };
+
+  // Binary comparisons
   const ops: BinaryCondition['op'][] = ['>=', '<=', '!=', '>', '<', '='];
   for (const op of ops) {
     const idx = raw.indexOf(op);
@@ -555,7 +712,6 @@ function parseAction(raw: string): ActionNode | null {
       return { kind: 'action', type: 'remove', target: parts[1] || '' };
     case 'set': {
       const rest = parts.slice(1).join(' ');
-      // Handle +=, -=, and = operators
       const opMatch = rest.match(/^(.+?)\s*(\+=|-=|=)\s*(.+)$/);
       if (!opMatch) return null;
       const target = opMatch[1].trim();
@@ -568,18 +724,59 @@ function parseAction(raw: string): ActionNode | null {
       return { kind: 'action', type: 'add_flag', target: parts[1]?.replace(/^"|"$/g, '') || '' };
     case 'del_flag':
       return { kind: 'action', type: 'del_flag', target: parts[1]?.replace(/^"|"$/g, '') || '' };
+
+    // Sprite/Layer system
+    // [show Aria center] [show Aria center with dissolve] [show Aria center with dissolve 0.5]
+    case 'show': {
+      const target = parts[1] || '';
+      const args = parts.slice(2);
+      return { kind: 'action', type: 'show', target, args };
+    }
+    // [hide Aria] [hide Aria with fade] [hide Aria with fade 0.5]
+    case 'hide': {
+      const target = parts[1] || '';
+      const args = parts.slice(2);
+      return { kind: 'action', type: 'hide', target, args };
+    }
+    // [move Aria right 0.5]
+    case 'move': {
+      const target = parts[1] || '';
+      const args = parts.slice(2);
+      return { kind: 'action', type: 'move', target, args };
+    }
+
+    // Transition: [transition fade 0.8]
+    case 'transition':
+      return { kind: 'action', type: 'transition', target: parts[1] || 'fade', args: parts.slice(2) };
+
+    // Audio channels
+    // [bgm play track.ogg] [bgm stop] [bgm crossfade track.ogg 1.0] [bgm volume 0.5]
+    case 'bgm':
+    case 'se':
+    case 'voice':
+      return { kind: 'action', type: cmd, target: parts[2] || '', value: parts[1] || 'play', args: parts.slice(3) };
+
+    // Visual effects
     case 'sfx':
       return { kind: 'action', type: 'sfx', target: parts[1] || '', args: parts.slice(2) };
     case 'shake':
       return { kind: 'action', type: 'shake', target: parts[1] || 'screen', args: parts.slice(2) };
+    case 'flash':
+      return { kind: 'action', type: 'flash', target: '', args: parts.slice(1) };
+
+    // Scene/flow
     case 'call':
       return { kind: 'action', type: 'call', target: parts[1] || '' };
+    case 'return':
+      return null; // handled by RETURN token
     case 'bg':
-      return { kind: 'action', type: 'bg', target: parts[1] || '' };
+      return { kind: 'action', type: 'bg', target: parts.slice(1).join(' ') || '' };
     case 'music':
       return { kind: 'action', type: 'music', target: parts[1] || '' };
+
+    // Wait variants: [wait], [wait 1.5], [wait click], [wait transition]
     case 'wait':
-      return { kind: 'action', type: 'wait', target: '', args: parts.slice(1) };
+      return { kind: 'action', type: 'wait', target: parts[1] || '', args: parts.slice(2) };
   }
 
   return null;

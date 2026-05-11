@@ -103,13 +103,27 @@ export function Preview(props: Props) {
         props.onSceneChange?.(ev.target);
         processToDisplay(idx + 1, evts);
         return;
-      case 'ACTION':
-        if (ev.type === 'bg') setBgImage(ev.target);
+      case 'BG':
+        setBgImage(ev.target);
         processToDisplay(idx + 1, evts);
         return;
-      case 'WAIT':
-        setTimeout(() => processToDisplay(idx + 1, evts), 500);
+      case 'ACTION':
+        processToDisplay(idx + 1, evts);
+        return;
+      case 'AUDIO':
+      case 'SHOW':
+      case 'HIDE':
+      case 'MOVE':
+      case 'TRANSITION':
+      case 'SHAKE':
+      case 'FLASH':
+        processToDisplay(idx + 1, evts);
+        return;
+      case 'WAIT': {
+        const dur = ev.duration ? ev.duration * 1000 : 500;
+        setTimeout(() => processToDisplay(idx + 1, evts), dur);
         break;
+      }
       case 'END':
         setText('~ Fin ~');
         setSpeaker('');
